@@ -4,17 +4,22 @@ import io.github.chamikathereal.schoolsystem.dto.request.LoginRequest;
 import io.github.chamikathereal.schoolsystem.dto.request.RegisterRequest;
 import io.github.chamikathereal.schoolsystem.dto.response.AuthResponse;
 import io.github.chamikathereal.schoolsystem.entity.User;
+import io.github.chamikathereal.schoolsystem.exception.DuplicateResourceException; // Import
+import io.github.chamikathereal.schoolsystem.exception.ResourceNotFoundException; // Import
 import io.github.chamikathereal.schoolsystem.repository.UserRepository;
-import io.github.chamikathereal.schoolsystem.service.interfaces.AuthService; // Import the Interface
+import io.github.chamikathereal.schoolsystem.service.interfaces.AuthService;
 import io.github.chamikathereal.schoolsystem.utils.JwtService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j; // Import
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j // Add Logger
 public class AuthServiceImpl implements AuthService {
 
     private final UserRepository userRepository;
@@ -24,12 +29,13 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public AuthResponse register(RegisterRequest request) {
-        // 1. Check if user exists
+        log.info("Registering new user: {}", request.getEmail());
+
         if (userRepository.findByEmail(request.getEmail()).isPresent()) {
-            throw new RuntimeException("Email already exists");
+            log.warn("Registration failed: Email {} already exists", request.getEmail());
+            throw new DuplicateResourceException("Email already exists");
         }
 
-        // 2. Create User Entity
         var user = User.builder()
                 .firstName(request.getFirstName())
                 .lastName(request.getLastName())
@@ -38,36 +44,35 @@ public class AuthServiceImpl implements AuthService {
                 .role(request.getRole())
                 .build();
 
-        // 3. Save to DB
         userRepository.save(user);
-
-        // 4. Generate Token
         var jwtToken = jwtService.generateToken(user);
 
-        return AuthResponse.builder()
-                .token(jwtToken)
-                .build();
+        log.info("User {} registered successfully. Role: {}", user.getEmail(), user.getRole());
+        return AuthResponse.builder().token(jwtToken).build();
     }
 
     @Override
     public AuthResponse login(LoginRequest request) {
-        // 1. Authenticate (Checks username/password)
-        authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(
-                        request.getEmail(),
-                        request.getPassword()
-                )
-        );
+        log.info("User {} attempting to login", request.getEmail());
 
-        // 2. If valid, fetch user
+        try {
+            authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(
+                            request.getEmail(),
+                            request.getPassword()
+                    )
+            );
+        } catch (AuthenticationException e) {
+            log.warn("Login failed for {}: Invalid credentials", request.getEmail());
+            throw new ResourceNotFoundException("Invalid email or password");
+        }
+
         var user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
-        // 3. Generate Token
         var jwtToken = jwtService.generateToken(user);
 
-        return AuthResponse.builder()
-                .token(jwtToken)
-                .build();
+        log.info("User {} logged in successfully", request.getEmail());
+        return AuthResponse.builder().token(jwtToken).build();
     }
 }
